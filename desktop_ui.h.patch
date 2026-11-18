@@ -1,0 +1,86 @@
+--- a/main/boards/alphapi-one-s-desktop/desktop_ui.h
++++ b/main/boards/alphapi-one-s-desktop/desktop_ui.h
+@@ -56,13 +56,14 @@
+ constexpr int kIconY = 90;
+ // Evenly distributed: 8px gutters, 4px outer margins, symmetric.
+ constexpr int kIconX[4] = {4, 44, 84, 124};
+-// Home icon order. desk_icons[] still ships as [game, smile/voice, radio,
+-// timer]; only the placement order changes, so the voice icon sits on the A
+-// key (first column) and the game icon on B.
++// Home icon order. desk_icons[] ships as [metronome, smile/voice, radio,
++// timer] (slot 0 was repurposed from game to a metronome icon for this build).
++// The voice icon sits on A (first column), the metronome icon on B.
+ constexpr int kHomeOrder[4] = {1, 0, 2, 3};
+ // Column -> page number: the single source of truth for the home
+ // double-click jump and for the home selection ring.
+-//   col0 小智 = page2, col1 游戏 = page1, col2 收音机 = page3, col3 计时 = page4
++//   col0 小智 = page2, col1 节拍器 = page1, col2 收音机 = page3, col3 计时 = page4
++// page1 is the metronome page in this build (was the game page upstream).
+ constexpr int kHomePageOfColumn[4] = {2, 1, 3, 4};
+ inline int HomeColumnOfPage(int page) {
+     for (int i = 0; i < 4; ++i) {
+@@ -222,7 +223,7 @@
+             std::memset(&d, 0, sizeof(d));
+             d.header.magic = LV_IMAGE_HEADER_MAGIC;
+             d.header.cf = LV_COLOR_FORMAT_RGB565;
+-            // Column i shows desk_icons[kHomeOrder[i]]: 小智, 游戏, 收音机, 计时器.
++            // Column i shows desk_icons[kHomeOrder[i]]: 小智, 节拍器, 收音机, 计时器.
+             const uint16_t* src = desk_icons[kHomeOrder[i]];
+             // v56: kIconSize == kIconSrcSize now, so point straight at the flash
+             // bitmap. The branch is constant-folded away; ScaleIcon only comes
+@@ -237,7 +238,8 @@
+         }
+ 
+         BuildHome(scr);
+-        game_.Build(scr, zh_, rt_);
++        // 本构建移除游戏：不再构建游戏页 UI（game_ 成员保留以兼容既有引用，
++        // 但不创建任何 LVGL 对象，也不占用运行内存）。
+         BuildVoice(scr);
+         BuildRadio(scr);
+         BuildTimer(scr);
+@@ -339,7 +341,12 @@
+         if (page != page_) SetPage(page);
+         switch (page_) {
+             case 0: RefreshHome(now); break;
+-            case 1: break;  // 游戏页由 Animate() 的 40ms 定时器持续刷新画布
++            case 1:
++                // 本构建：page1 = 节拍器页（原游戏页位置）。metro_ 视图挂在
++                // timer_ 容器里，这里强制切到节拍器子视图并刷新。
++                SyncTimerView(2);
++                RefreshMetro(now);
++                break;
+             case 2: RefreshVoice(now); break;
+             case 3: RefreshRadio(now); break;
+             case 4:
+@@ -719,7 +726,9 @@
+ 
+     void SetPage(int page) {
+         page_ = std::clamp(page, 0, 5);
+-        lv_obj_t* all[6] = {home_, game_.root, voice_, radio_.root, timer_, cfg_};
++        // 本构建：page1（原游戏页）= 节拍器，复用 timer_ 容器里的 metro_ 视图。
++        // game_.root 不再挂到任何主页入口，游戏功能不可达。
++        lv_obj_t* all[6] = {home_, timer_, voice_, radio_.root, timer_, cfg_};
+         for (int i = 0; i < 6; i++) {
+             if (all[i] == nullptr) continue;
+             if (i == page_) {
+@@ -1379,17 +1388,10 @@
+ 
+     void Animate() {
+         if (!ready_) return;
+-        if (page_ == 1) {
+-            // 33ms 一帧（约 30fps）：25ms 时全屏 canvas 重绘 + SPI flush 会把
+-            // UI 任务占满，按键扫描反而被挤慢。按键本身由 Key()::RedrawNow()
+-            // 立即重画，不依赖这个帧率。
+-            const int want = game_.InPlay() ? 33 : 40;
+-            if (anim_ && want != anim_period_) { anim_period_ = want; lv_timer_set_period(anim_, want); }
+-            game_.Tick();
+-            return;
+-        }
++        // 本构建无游戏页（page1 已是节拍器），不再需要游戏 canvas 的高帧率刷新。
++        // 节拍器由 DesktopRuntime 的拍点定时逻辑驱动，收音机波形由 UiTask 主循环
++        // （PumpRadioMeter）驱动，这里统一保持 40ms 即可。
+         if (anim_ && anim_period_ != 40) { anim_period_ = 40; lv_timer_set_period(anim_, 40); }
+-        // 收音机波形已移到 UiTask 主循环（PumpRadioMeter），这里不再重复刷新。
+     }
+ 
+     DesktopRuntime* rt_ = nullptr;

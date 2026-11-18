@@ -1,0 +1,157 @@
+--- a/main/boards/alphapi-one-s-desktop/desktop_board.cc
++++ b/main/boards/alphapi-one-s-desktop/desktop_board.cc
+@@ -87,6 +87,8 @@
+ // v47：页面 + 计时页当前视图 → 键位表行号。计时页一个 page 里装了目录和
+ // 三个子界面，键位完全不同，所以不能再用"行号 = 页面号"。
+ int RowForPage(int page,int timer_view){
++ // 本构建：page1 = 节拍器页，直接复用节拍器键位行（row 6）。
++ if(page==1)return 6;
+  if(page!=4)return std::clamp(page,0,5);
+  switch(timer_view){
+   case 1:return 8;   // 定时器（倒计时）
+@@ -294,23 +296,6 @@
+    for(int y=0;y<32;y++)for(int x=0;x<32;x++)lcd.DrawPixel(xpos[i]+x,84+y,icon[y*32+x]);
+   }
+   if(ap_enabled)desktop_home::Text(lcd,9,70,"配网热点已开启",warm,159);
+- }else if(page==1){
+-  desktop_home::Text(lcd,9,6,"游戏",accent,159);
+-  snprintf(buffer,sizeof(buffer),"%02d / %02d",radio.station_index()+1,radio.station_count());
+-  desktop_home::Text(lcd,112,6,buffer,muted,159);
+-  Text(lcd,12,30,radio.station_name(),white,149,64,true);
+-  const char* st="等待播放";switch(radio.state()){
+-   case radio::PlayerState::kConnecting:st="正在连接";break;
+-   case radio::PlayerState::kBuffering:st="正在缓冲";break;
+-   case radio::PlayerState::kPlaying:st="正在播放";break;
+-   case radio::PlayerState::kPaused:st="已暂停";break;
+-   case radio::PlayerState::kReconnecting:st="正在重连";break;
+-   case radio::PlayerState::kError:st="暂不可用";break;default:break;}
+-  Text(lcd,12,78,st,warm,149,92);
+-  for(int i=0;i<12;i++){
+-   int h=4+((i*7+(int)(now_ms/120))%17);
+-   gfx::RoundRect(lcd,14+i*11,112-h,7,h,2.0f,i%3==0?warm:Color(42,80,110));
+-  }
+  }else if(page==2){
+   const auto ink=Color(147,170,198),hint=Color(113,134,160),bg=Color(14,20,32);
+   lcd.FillRect(0,0,160,22,Color(22,35,58));
+@@ -343,10 +328,11 @@
+    int h=4+((i*5+(int)(now_ms/140))%17);
+    gfx::RoundRect(lcd,14+i*11,112-h,7,h,2.0f,i%4==0?accent:Color(42,80,110));
+   }
+- }else if(page==4){
++ }else if(page==1||page==4){
+   // 自绘兜底路径（LVGL 没起来时才会走到）：目录/秒表没有对应的点阵绘制，
+   // 这里只保留节拍器与倒计时，屏幕至少还能用。
+-  if(timer_view==2)metro.Draw(lcd,now_ms*1000,(now_ms/400)%2==0);
++  // 本构建：page1 是节拍器页，强制画节拍器；page4 按 timer_view 决定。
++  if(page==1||timer_view==2)metro.Draw(lcd,now_ms*1000,(now_ms/400)%2==0);
+   else countdown.Draw(lcd,now_ms,(now_ms/400)%2==0);
+  }
+  if(now_ms < volume_overlay_until){
+@@ -387,9 +373,9 @@
+  if(current==1||current==3){radio_started=false;codec.audio.KeepAlive(false);codec.audio.StopBeepTask();}
+  // v41：计时页也会跑常开底流（读秒声要有声），离开时同样先收流。
+  if(current==4){codec.audio.KeepAlive(false);codec.audio.StopBeepTask();}
+- // 节拍器离开即停拍：这一页没有"后台继续走"的意义，却会一直占着音效通道。
+- if(current==4)metro.Stop();
+- if(current==1)g_ui.GameLeave();
++ // 本构建：page1 已是节拍器页（原游戏页）。离开 page1 或 page4 都要停拍，
++ // 这一页没有"后台继续走"的意义，却会一直占着音效通道。
++ if(current==1||current==4)metro.Stop();
+  if(current==3)g_ui.OnLeaveRadio();
+  if(current==2){Application::GetInstance().ExitDesktopVoice();voice_cleanup_pending=true;}
+  radio_pending=false;voice_pending=false;radio_ready_at=0;voice_ready_at=0;
+@@ -428,15 +414,15 @@
+   metro.Stop();
+   timer_hint_until=esp_timer_get_time()/1000+8000;
+  }else if(page==1){
+-  // v35：进游戏页先确认音量不是 0。收音机静音（D 短按）会持久化成 0，
+-  // 到了一个只有按键音效的游戏页就是"完全没声音"，很容易被当成故障。
++  // 本构建：page1 = 节拍器页（原游戏页位置）。直接进入节拍器子视图。
++  // 确认音量不是 0：收音机静音会持久化成 0，节拍器的拍点声就听不见了。
+   if(codec.audio.volume()<=0)SetVolume(45);
+-  // v36：这里**不再**预发 WAV 头。以前进游戏页先 Start() 一次，结果
+-  // configured_ 被置成 true 却没有任何 PCM 跟上去，之后每条音效都以为
+-  // "链路已就绪"而跳过握手 —— 芯片其实早已不在播放态，全部静音吞掉。
+-  // 现在由 PlayBeep 每次发声前自己完整握手，这里无需预开。
++  timer_view=2;          // 强制节拍器视图（1 定时器 / 2 节拍器 / 3 秒表）
++  timer_menu_sel=1;      // 目录里也把光标停在节拍器
++  metro.Stop();
++  timer_hint_until=esp_timer_get_time()/1000+5000;
+  }
+- // page==1 是游戏页，不启动任何音频流；进游戏页时上面的 current==1 分支已停掉收音机。
++ // page1 是节拍器页，不启动电台流；进入时上面的 current 分支已停掉收音机与上一页的拍点。
+  dirty=true;
+ }
+ // 复刻自 v22：进首页/语音/收音机/计时页时先复位电台列表为默认台并停流。
+@@ -845,12 +831,8 @@
+   if(idx==0&&(gesture==0||gesture==1))OpenAPAsync(!ap_desired.load());
+   return;
+  }
+- if(page==1){
+-  // 游戏页独占 4 键：单击/长按两档原样交给 GameKey，键位由各游戏自己定义
+-  // （启动器里 D 单击/长按回主页也在 GameKey 内处理，这里不再拦）。
+-  g_ui.RouteGame(idx,gesture>=2?2:0);
+-  return;
+- }
++ // 本构建：page1 已是节拍器页，不再有游戏页独占按键分支；
++ // 它现在和计时页一样走下面的通用键位表（RowForPage 返回节拍器行）。
+  if(page==3&&g_ui.RadioListOpen()){
+   // 电台列表内部键位（复刻独立版）：A 播放选中台并返回、B/C 上下移动、
+   // D 返回。列表打开时双击不再跳页，长按只认 D 返回。
+@@ -889,8 +871,6 @@
+ void DesktopRuntime::UiTask(){
+  struct Track{bool down=false;int64_t down_ms=0;bool long_fired=false;int64_t repeat_ms=0;bool tap_pending=false;int64_t tap_ms=0;};
+  constexpr int64_t kLongMs=650,kRepeatMs=200,kDoubleMs=280;
+- // 游戏页长按阈值更重一些：方向键按住是常事，0.9 秒才算长按，避免误退出。
+- constexpr int64_t kGameLongMs=900;
+  constexpr uint8_t masks[4]={4,8,2,1};
+  uint8_t stable=0,candidate=0;int matches=0;
+  int64_t previous_loop=0,last_render=0;
+@@ -932,7 +912,8 @@
+    const bool tick_busy=tick_page==2||tick_page==3||radio.running()||
+                         !Application::GetInstance().DesktopVoiceStopped()||
+                         // 节拍器的连续流正占着音效通道，读秒声插进去只会被丢掉
+-                        (tick_page==4&&timer_view==2);
++                        // 本构建：page1 也是节拍器页
++                        (tick_page==1||(tick_page==4&&timer_view==2));
+    if(!tick_busy){
+     const int left=countdown.Remaining(now)/1000;
+     // 读秒声：普通秒 40ms、最后 3 秒高音 50ms，各自是 assets 里的一段样本
+@@ -946,7 +927,8 @@
+   // 速度精确，也不再依赖"单段流要多长"。
+   {
+    const int mpage=desktop_page.load();
+-   const bool on_metro_page=(mpage==4&&timer_view==2);
++   // 本构建：page1 是独立的节拍器页；page4 在 timer_view==2 时也是节拍器。
++   const bool on_metro_page=(mpage==1||(mpage==4&&timer_view==2));
+    if(on_metro_page)metro.Tick(esp_timer_get_time());  // 只驱动屏幕上的拍点
+    else if(metro.running)metro.Stop();
+    // 拍点的音色取自 assets 里的两段样本（重拍高八度）；资源缺失时 N32Audio
+@@ -972,7 +954,8 @@
+    }
+   }
+   int page=desktop_page.load();
+-  const bool game_page=(page==1);
++  // 本构建已无游戏页：page1 是节拍器，走普通键位处理（正常长按/双击节奏）。
++  const bool game_page=false;
+   // v37：切页等待加硬超时。原来这里无条件等「收音机三任务退干净 /
+   // 语音服务停稳」，只要有一路卡在 UART 写重试（音频链路异常时可达数秒），
+   // 页面就永远停在"正在切换小智/正在连接"——用户看到的就是"卡死"。
+@@ -1066,7 +1049,7 @@
+    }
+    stable=candidate;
+   }
+-  const int64_t long_ms=game_page?kGameLongMs:kLongMs;
++  const int64_t long_ms=kLongMs;
+   for(int i=0;i<4;i++){
+    if(track[i].down&&!track[i].long_fired&&now-track[i].down_ms>=long_ms){
+     track[i].long_fired=true;track[i].tap_pending=false;Key(masks[i],2);
+@@ -1114,6 +1097,8 @@
+    if(now-last_render>=80)dirty=true;
+   }else if(now-last_render>=250||(countdown.finished&&now-last_render>=400))dirty=true;
+  }
++ // 本构建：page1 是节拍器页，拍点要跟手，用 80ms 刷新节奏。
++ if(page==1&&now-last_render>=80)dirty=true;
+   if(page==2&&now-last_render>=160)dirty=true;
+   if(countdown.finished&&page!=4&&now-last_render>=1000)dirty=true;
+   if(dirty.load()&&now-last_render>=80){
