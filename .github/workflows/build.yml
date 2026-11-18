@@ -1,5 +1,8 @@
 name: Build 4func firmware
 on: [push, workflow_dispatch]
+permissions:
+  contents: read
+  actions: write
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -10,18 +13,21 @@ jobs:
         shell: bash
         run: |
           set +e
-          (
-            echo "=== ENV ==="
-            echo "IDF_PATH=$IDF_PATH"
-            python3 --version
-            which patch || echo "NO PATCH"
-            echo "=== START CI BUILD ==="
-            python3 ci_build.py
-            echo "=== CI BUILD EXIT: $? ==="
-          ) 2>&1 | tee build.log
-          echo "PIPE_STATUS=${PIPESTATUS[0]}" | tee -a build.log
-          exit ${PIPESTATUS[0]}
-      - name: Upload log always
+          python3 ci_build.py > build.log 2>&1
+          RC=$?
+          echo "BUILD_EXIT_CODE=$RC"
+          echo "===== KEY LINES (annotations) ====="
+          grep -iE "=== STEP|error|fatal|Traceback|Exception|FAILED|No such file|non-zero|missing|denied|unauthorized|BUILD DONE|download|collected|patching|Hunk" build.log | tail -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          echo "===== TAIL (annotations) ====="
+          tail -20 build.log | while IFS= read -r line; do echo "::error::${line}"; done
+          {
+            echo "## Build result (exit $RC)"
+            echo '```'
+            tail -120 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $RC
+      - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4
         with:
