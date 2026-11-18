@@ -16,16 +16,12 @@ jobs:
           python3 ci_build.py > build.log 2>&1
           RC=$?
           echo "BUILD_EXIT_CODE=$RC"
-          echo "===== KEY LINES (annotations) ====="
-          grep -iE "=== STEP|error|fatal|Traceback|Exception|FAILED|No such file|non-zero|missing|denied|unauthorized|BUILD DONE|download|collected|patching|Hunk" build.log | tail -40 | while IFS= read -r line; do echo "::error::${line}"; done
-          echo "===== TAIL (annotations) ====="
-          tail -20 build.log | while IFS= read -r line; do echo "::error::${line}"; done
-          {
-            echo "## Build result (exit $RC)"
-            echo '```'
-            tail -120 build.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== publish full log ====="
+          PASTE_URL=$(curl -s --max-time 40 -X POST --data-binary @build.log https://paste.rs/ 2>/dev/null | tr -d '\n\r')
+          echo "::error::BUILD_RC=${RC} LOG=${PASTE_URL:-none}"
+          echo "===== real error lines ====="
+          grep -iE "error:|FAILED:|CMake Error|Traceback|ninja: build stopped|undefined reference|No rule to make" build.log | tail -30 | while IFS= read -r line; do echo "::error::${line}"; done
+          tail -8 build.log | while IFS= read -r line; do echo "::error::TAIL ${line}"; done
           exit $RC
       - name: Upload log
         if: always()
