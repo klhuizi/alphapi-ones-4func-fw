@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """Replace desk_icons[0] (game icon) in desktop_assets.h with a metronome icon.
-Runs on the CI runner right after upstream source is unpacked.
-Path is passed as argv[1] (path to desktop_assets.h).
+
+FIXED VERSION: only the first 1024 values are replaced, so the original four
+row braces  }, {  are preserved.  The previous version flattened all 4096
+values into one inner brace and caused:
+    error: too many initializers for 'const uint16_t [1024]'
+
+Usage:
+    python3 gen_metronome_icon.py path/to/desktop_assets.h
 """
 import re
 import sys
@@ -43,7 +49,7 @@ def line(x0, y0, x1, y1, c, w=1):
 def fill_triangle(p0, p1, p2, c):
     def sign(a, b, cpt):
         return (a[0] - cpt[0]) * (b[1] - cpt[1]) - (b[0] - cpt[0]) * (a[1] - cpt[1])
-    minx = int(min(p0[0], p1[0], p2[0])); maxx = int(max(p0[0], p1[0], p2[0]))
+    minx = int(min(p0[0], p1[0], p2[0])); maxx = int(max(p0[1], p1[1], p2[1]))
     miny = int(min(p0[1], p1[1], p2[1])); maxy = int(max(p0[1], p1[1], p2[1]))
     for y in range(miny, maxy + 1):
         for x in range(minx, maxx + 1):
@@ -72,26 +78,37 @@ line(20, 4, 23, 2, SHADOW, 1)
 line(23, 8, 27, 7, SHADOW, 1)
 
 vals = ["0x%04x" % px[y][x] for y in range(N) for x in range(N)]
+assert len(vals) == 1024, len(vals)
 
 src = open(PATH, encoding="utf-8").read()
 start = src.index("desk_icons[4][1024]")
-arr_start = src.index("{{", start) + 1
-m = re.search(r"0x[0-9a-fA-F]{4}", src[arr_start:])
-first_val = arr_start + m.start()
-all_matches = list(re.finditer(r"0x[0-9a-fA-F]{4}", src[first_val:]))
-assert len(all_matches) >= 4096, len(all_matches)
-end_val = first_val + all_matches[4095].end()
 
-old_block = src[first_val:end_val]
-old_vals = re.findall(r"0x[0-9a-fA-F]{4}", old_block)
-assert len(old_vals) == 4096
-new_vals = vals + old_vals[1024:]
+# Locate the whole initializer, from the first '{' to the closing '};'.
+outer_open = src.index("{", src.index("=", start))
+outer_close = src.index("};", outer_open) + 1
+array = src[outer_open:outer_close]
 
-lines = []
-for i in range(0, len(new_vals), 16):
-    lines.append(",".join(new_vals[i:i+16]))
+all_matches = list(re.finditer(r"0x[0-9a-fA-F]{4}", array))
+assert len(all_matches) == 4096, "expected 4096 icon values, got %d" % len(all_matches)
+
+# Preserve row separators: only replace values 0..1023 (the game icon).
+first_val = outer_open + all_matches[0].start()
+end_first_row = outer_open + all_matches[1023].end()
+
+lines = [",".join(vals[i:i + 16]) for i in range(0, 1024, 16)]
 new_block = ",\n".join(lines)
 
-out = src[:first_val] + new_block + src[end_val:]
+out = src[:first_val] + new_block + src[end_first_row:]
 open(PATH, "w", encoding="utf-8").write(out)
-print("icon replaced OK, total vals:", len(new_vals))
+
+# Verify: exactly 4 rows, 1024 values each, 3 row separators kept.
+check = open(PATH, encoding="utf-8").read()
+cstart = check.index("desk_icons[4][1024]")
+copen = check.index("{", check.index("=", cstart))
+cclose = check.index("};", copen) + 1
+carray = check[copen:cclose]
+rows = re.split(r"},\s*{", carray)
+counts = [len(re.findall(r"0x[0-9a-fA-F]{4}", row)) for row in rows]
+assert counts == [1024, 1024, 1024, 1024], "row counts wrong: %r" % counts
+
+print("icon replaced OK: rows=%s, separators=%d" % (counts, len(rows) - 1))
